@@ -675,6 +675,14 @@ jobs:
         CT_LOG_LEVEL_MAX="EXTRA"
         EOF
 
+        # Reduce parallelism to work around the `kern.maxproc` issue when
+        # building x86-64 macOS toolchain
+        if [ "${{ matrix.host.name }}" == "macos-x86_64" ]; then
+          cat <<EOF >> .config
+        CT_PARALLEL_JOBS=$(($(nproc) - 1))
+        EOF
+        fi
+
         # Set Canadian cross compilation configurations
         if [ "${{ matrix.host.name }}" == "macos-x86_64" ]; then
           # Building for macos-x86_64 on macos-aarch64
