@@ -143,7 +143,7 @@ ${BUILD_SOURCE}/configure \
   --prefix="${BUILD_PREFIX}"
 
 # Build QEMU
-make -j
+make -j$(nproc)
 
 # Install QEMU
 make install

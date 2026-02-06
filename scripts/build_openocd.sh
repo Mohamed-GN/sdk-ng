@@ -87,7 +87,7 @@ elif [[ "${BUILD_HOST}" =~ ^macos-.* ]]; then
     --prefix=${BUILD_SYSROOT} \
     --enable-static \
     --disable-shared
-  make -j
+  make -j$(nproc)
   make install
   popd
 
@@ -139,7 +139,7 @@ ${BUILD_SOURCE}/configure \
   ${OPENOCD_FLAGS} \
   --prefix="${BUILD_PREFIX}"
 
-make -j
+make -j$(nproc)
 make install
 
 popd

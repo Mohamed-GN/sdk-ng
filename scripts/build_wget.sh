@@ -83,7 +83,7 @@ ${BUILD_SOURCE}/configure \
   ${WGET_FLAGS} \
   --prefix="${BUILD_PREFIX}"
 
-make -j
+make -j$(nproc)
 make install
 
 # Install root CA certificates (Mozilla CA certificate store)
