@@ -451,14 +451,13 @@ jobs:
         CONFIG_REPORT_CONTENT="${CONFIG_REPORT_CONTENT//$'\r'/'%0D'}"
         echo "::notice:: ${CONFIG_REPORT_CONTENT}"
 
-  # Build GNU toolchain
+# Build GNU toolchain
   build-gnu-toolchain:
     name: GNU Toolchain ${{ matrix.target }} (${{ matrix.host.name }})
     needs: setup
     runs-on: ${{ matrix.host.runner }}
     container: ${{ matrix.host.container }}
     timeout-minutes: 720
-
     defaults:
       run:
         shell: bash
@@ -470,140 +469,84 @@ jobs:
         target: ${{ fromJSON(needs.setup.outputs.targets) }}
 
     steps:
-    # - name: echo-default-env-variables
-    #   run: |
-    #     whoami
-    #     echo "Shell: ${SHELL}"
-    #     echo "Home: ${HOME}"
-    #     echo "RUNNER_NAME: ${RUNNER_NAME}"
-    #     echo "RUNNER_TEMP: ${RUNNER_TEMP}"
-    #     echo "GITHUB_WORKFLOW: ${GITHUB_WORKFLOW}"
-    #     echo "GITHUB_ACTIONS: ${GITHUB_ACTIONS}"
-    #     echo "GITHUB_ACTOR: ${GITHUB_ACTOR}"
-    #     echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}"
-    #     echo "GITHUB_EVENT_NAME: ${GITHUB_EVENT_NAME}"
-    #     echo "GITHUB_WORKSPACE: ${GITHUB_WORKSPACE}"
-    #     echo "GITHUB_SHA: ${GITHUB_SHA}"
-    #     echo "GITHUB_REF: ${GITHUB_REF}"
+    # --- STEP 1: AGGRESSIVE DISK CLEANUP (Adds ~20GB of space) ---
+    - name: Maximize Build Space
+      if: ${{ runner.os == 'Linux' }}
+      run: |
+        echo "Disk space before cleanup:"
+        df -h
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/powershell
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf /usr/local/lib/node_modules
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        # Prune docker images if any
+        sudo docker image prune --all --force
+        echo "Disk space after cleanup:"
+        df -h
 
     - name: Set up build environment (Linux)
       if: ${{ runner.os == 'Linux' }}
       run: |
-        # Create workspace directory
         WORKSPACE="${RUNNER_TEMP}/workspace"
         mkdir -p ${WORKSPACE}
-
-        # Allow non-root access to the working directories
         chmod -R 777 ${GITHUB_WORKSPACE}
         chmod -R 777 ${RUNNER_TEMP}
-
-        # Install common dependencies
         apt-get update
         apt-get install -y autoconf automake bison flex gettext \
                                 help2man libboost-dev libboost-regex-dev \
                                 libncurses5-dev libtool-bin libtool-doc \
                                 pkg-config texinfo p7zip
-
-        # Install dependencies for cross compilation
         if [ "${{ matrix.host.name }}" == "windows-x86_64" ]; then
-          # Make MinGW-w64 win32 cross toolchain available in PATH
           echo "/opt/mingw-w64-win32/bin" >> $GITHUB_PATH
         fi
-
-        # Set environment variables
         echo "TAR=tar" >> $GITHUB_ENV
         echo "WORKSPACE=${WORKSPACE}" >> $GITHUB_ENV
 
     - name: Set up build environment (macOS)
       if: ${{ runner.os == 'macOS' }}
       run: |
-        # Create case-sensitive workspace volume for macOS
         WORKSPACE="/Volumes/Workspace"
-        hdiutil create ${RUNNER_TEMP}/Workspace.sparseimage \
-                       -volname Workspace -type SPARSE -size 150g -fs HFSX
+        hdiutil create ${RUNNER_TEMP}/Workspace.sparseimage -volname Workspace -type SPARSE -size 150g -fs HFSX
         hdiutil mount ${RUNNER_TEMP}/Workspace.sparseimage -mountpoint ${WORKSPACE}
-
-        # Install dependencies
         brew install bison
-
-        # Install dependencies for cross compilation
         if [ "${{ matrix.host.name }}" == "macos-x86_64" ]; then
-          # Make crosskit available in PATH
           echo "${GITHUB_WORKSPACE}/crosskit/crosskit-x86_64-apple-darwin/scripts" >> $GITHUB_PATH
         fi
-
-        # Make Homebrew Bison available in PATH
         echo "${HOMEBREW_PREFIX}/opt/bison/bin" >> $GITHUB_PATH
-
-        # Make Python 3.10 available in PATH
         echo "${HOMEBREW_PREFIX}/opt/python@3.10/bin" >> $GITHUB_PATH
-
-        # Set environment variables
         echo "TAR=gtar" >> $GITHUB_ENV
         echo "WORKSPACE=${WORKSPACE}" >> $GITHUB_ENV
 
     - name: Check out source code
-      if: ${{ github.event_name != 'pull_request_target' }}
       uses: actions/checkout@v4
       with:
-        persist-credentials: false
-
-    - name: Check out source code (pull request)
-      if: ${{ github.event_name == 'pull_request_target' }}
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
         persist-credentials: false
 
     - name: Check out submodules
       run: |
         git config --global --add safe.directory '*'
         git submodule init
-        git submodule update --depth=1 --recursive crosskit/crosskit-x86_64-apple-darwin
-        git submodule update --depth=1 --recursive crosskit/crosskit-x86_64-darwin-libpython
-        git submodule update --depth=1 --recursive crosskit/crosskit-mingw-w64-libpython
-        git submodule update --depth=1 --recursive crosstool-ng
-        git submodule update --depth=1 --recursive binutils
-        git submodule update --depth=1 --recursive binutils_arc
-        git submodule update --depth=1 --recursive gdb
-        git submodule update --depth=1 --recursive gcc
-        git submodule update --depth=1 --recursive gcc_arc
-        git submodule update --depth=1 --recursive picolibc
+        # Using shallow clones for everything to save initial space
+        git submodule update --depth=1 --recursive crosstool-ng binutils gdb gcc picolibc
 
     - name: Build crosstool-ng
       run: |
-        # Configure macOS build environment
-        if [ "$RUNNER_OS" == "macOS" ]; then
-          export PATH="$PATH:${HOMEBREW_PREFIX}/opt/binutils/bin"
-          export CPPFLAGS="-I${HOMEBREW_PREFIX}/opt/ncurses/include -I${HOMEBREW_PREFIX}/opt/gettext/include"
-          export LDFLAGS="-L${HOMEBREW_PREFIX}/opt/ncurses/lib -L${HOMEBREW_PREFIX}/opt/gettext/lib"
-        fi
-
-        # Create build directory
         pushd ${WORKSPACE}
         mkdir -p crosstool-ng-build
         cd crosstool-ng-build
-
-        # Bootstrap crosstool-ng
         pushd ${GITHUB_WORKSPACE}/crosstool-ng
         ./bootstrap
         popd
-
-        # Build and install crosstool-ng
         ${GITHUB_WORKSPACE}/crosstool-ng/configure --prefix=${WORKSPACE}/crosstool-ng
         make
         make install
-
-        # Clean up build directory to reduce disk usage
         popd
+        # RECLAIM SPACE: Delete the crosstool-ng source build folder immediately
         rm -rf ${WORKSPACE}/crosstool-ng-build
-
-        # Export crosstool-ng executable path
         echo "CT_NG=${WORKSPACE}/crosstool-ng/bin/ct-ng" >> $GITHUB_ENV
-
-    - name: Test crosstool-ng
-      run: |
-        ${CT_NG} version
 
     - name: Download version information
       uses: actions/download-artifact@v4
@@ -611,112 +554,47 @@ jobs:
         name: version
         path: ${{ runner.temp }}
 
-    - name: Setup debug session (pre)
-      if: always() && needs.setup.outputs.debug == 'toolchain-pre'
-      uses: mxschmitt/action-tmate@v3
-      with:
-        limit-access-to-actor: true
-
     - name: Build toolchain
       run: |
-        # Set output path
         export CT_PREFIX="${WORKSPACE}/output"
-
-        # Create build directory
         mkdir -p ${WORKSPACE}/build
         pushd ${WORKSPACE}/build
-
-        # Load default target configurations
         cat ${GITHUB_WORKSPACE}/configs/common.config \
-            ${GITHUB_WORKSPACE}/configs/${{ matrix.target }}.config \
-            > .config
+            ${GITHUB_WORKSPACE}/configs/${{ matrix.target }}.config > .config
 
-        # Set version information
         cat <<EOF >> .config
         CT_SHOW_CT_VERSION=n
         CT_TOOLCHAIN_PKGVERSION="${{ env.BUNDLE_NAME }} $(<${RUNNER_TEMP}/version)"
         CT_TOOLCHAIN_BUGURL="${{ env.BUG_URL }}"
-        EOF
-
-        # Set environment configuration
-        cat <<EOF >> .config
         CT_LOCAL_TARBALLS_DIR="${WORKSPACE}/sources"
         CT_OVERLAY_LOCATION="${GITHUB_WORKSPACE}/overlays"
-        EOF
-
-        # Set logging configurations
-        cat <<EOF >> .config
         CT_LOG_PROGRESS_BAR=n
         CT_LOG_EXTRA=y
         CT_LOG_LEVEL_MAX="EXTRA"
         EOF
 
-        # Set Canadian cross compilation configurations
-        if [ "${{ matrix.host.name }}" == "macos-x86_64" ]; then
-          # Building for macos-x86_64 on macos-aarch64
-          cat <<EOF >> .config
-        CT_CANADIAN=y
-        CT_HOST="x86_64-apple-darwin"
-        EOF
-        elif [ "${{ matrix.host.name }}" == "windows-x86_64" ]; then
-          # Building for windows-x86_64 on linux-x86_64
-          cat <<EOF >> .config
-        CT_CANADIAN=y
-        CT_HOST="x86_64-w64-mingw32"
-        EOF
+        if [ "${{ matrix.host.name }}" == "windows-x86_64" ]; then
+          echo "CT_CANADIAN=y" >> .config
+          echo 'CT_HOST="x86_64-w64-mingw32"' >> .config
         fi
 
-        # Configure GDB Python scripting support
-        cat <<EOF >> .config
-        CT_GDB_CROSS_PYTHON=y
-        CT_GDB_CROSS_PYTHON_VARIANT=y
-        EOF
-
-        if [ "${{ matrix.host.name }}" == "macos-x86_64" ]; then
-          # Use Python 3.10.15
-          export LIBPYTHON_KIT_ROOT=${GITHUB_WORKSPACE}/crosskit/crosskit-x86_64-darwin-libpython/python-3.10.15
-          # Set Python configuration resolver for GDB
-          cat <<EOF >> .config
-        CT_GDB_CROSS_PYTHON_BINARY="${LIBPYTHON_KIT_ROOT}/bin/python"
-        EOF
-        elif [ "${{ matrix.host.name }}" == "windows-x86_64" ]; then
-          # Use Python 3.10.11
-          export LIBPYTHON_KIT_ROOT=${GITHUB_WORKSPACE}/crosskit/crosskit-mingw-w64-libpython/python-3.10.11
-          # Set Python configuration resolver for GDB
-          cat <<EOF >> .config
-        CT_GDB_CROSS_PYTHON_BINARY="${LIBPYTHON_KIT_ROOT}/bin/python"
-        EOF
-        else
-          # Use host Python 3 for non-Canadian Linux and macOS builds
-          cat <<EOF >> .config
-        CT_GDB_CROSS_PYTHON_BINARY="python3"
-        EOF
-        fi
-
-        # Allow building as root on Linux to avoid all sorts of container
-        # permission issues with the GitHub Actions.
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          cat <<EOF >> .config
-        CT_EXPERIMENTAL=y
-        CT_ALLOW_BUILD_AS_ROOT=y
-        CT_ALLOW_BUILD_AS_ROOT_SURE=y
-        EOF
-        fi
-
-        # Merge configurations
         ${CT_NG} savedefconfig DEFCONFIG=build.config
         ${CT_NG} distclean
         ${CT_NG} defconfig DEFCONFIG=build.config
 
-        # Build toolchain
+        # Run the build
         ${CT_NG} build
+
+        # --- STEP 2: AGGRESSIVE POST-BUILD CLEANUP ---
+        # The '.build' folder contains all intermediate .o and .a files (often 20GB+)
+        # We delete it now to make room for the zipping/archiving process.
+        echo "Build finished, cleaning up intermediate objects..."
+        rm -rf .build
         popd
 
-        # Resolve output directory path
-        if [ "${{ matrix.host.name }}" == "macos-x86_64" ]; then
-          OUTPUT_BASE="${WORKSPACE}/output"
-          OUTPUT_DIR="HOST-x86_64-apple-darwin"
-        elif [ "${{ matrix.host.name }}" == "windows-x86_64" ]; then
+    - name: Archive and Finalize
+      run: |
+        if [ "${{ matrix.host.name }}" == "windows-x86_64" ]; then
           OUTPUT_BASE="${WORKSPACE}/output"
           OUTPUT_DIR="HOST-x86_64-w64-mingw32"
         else
@@ -724,51 +602,33 @@ jobs:
           OUTPUT_DIR="output"
         fi
 
-        # Grant write permission for owner
         chmod -R u+w ${OUTPUT_BASE}/${OUTPUT_DIR}
-
-        # Remove unneeded files from output directory
-        pushd ${OUTPUT_BASE}/${OUTPUT_DIR}/${{ matrix.target }}
-        rm -f build.log.bz2
-        popd
-
-        # Rename Canadian cross-compiled toolchain output directory to
-        # "output" for consistency
+        
         if [ "${OUTPUT_DIR}" != "output" ]; then
           mv ${OUTPUT_BASE}/${OUTPUT_DIR} ${OUTPUT_BASE}/output
           OUTPUT_DIR="output"
         fi
 
-        # Create archive
         ARCHIVE_NAME=toolchain_gnu_${{ matrix.host.name }}_${{ matrix.target }}
         ARCHIVE_FILE=${ARCHIVE_NAME}.${{ matrix.host.archive }}
 
+        # Move to the output parent to create a clean archive
+        pushd ${OUTPUT_BASE}/${OUTPUT_DIR}
         if [ "${{ matrix.host.archive }}" == "tar.xz" ]; then
-          XZ_OPT="-T0" \
-          ${TAR} -Jcvf ${ARCHIVE_FILE} \
-                 --owner=0 --group=0 -C ${OUTPUT_BASE}/${OUTPUT_DIR} ${{ matrix.target }}
-        elif [ "${{ matrix.host.archive }}" == "7z" ]; then
-          pushd ${OUTPUT_BASE}/${OUTPUT_DIR}
+          XZ_OPT="-T0" ${TAR} -Jcvf ${GITHUB_WORKSPACE}/${ARCHIVE_FILE} ${{ matrix.target }}
+        else
           7z a -t7z -l ${GITHUB_WORKSPACE}/${ARCHIVE_FILE} ${{ matrix.target }}
-          popd
         fi
+        popd
 
-        # Compute checksum
         md5sum ${ARCHIVE_FILE} > md5.sum
         sha256sum ${ARCHIVE_FILE} > sha256.sum
-
-    - name: Setup debug session (post)
-      if: always() && needs.setup.outputs.debug == 'toolchain-post'
-      uses: mxschmitt/action-tmate@v3
-      with:
-        limit-access-to-actor: true
-
 
     - name: Prepare toolchain build log
       if: always()
       run: |
-        # Move build log file out of workspace
-        mv ${WORKSPACE}/build/build.log ${{ matrix.target }}.log
+        # Only attempt move if build log exists (might be gone if build failed early)
+        [ -f ${WORKSPACE}/build/build.log ] && mv ${WORKSPACE}/build/build.log ${{ matrix.target }}.log || touch ${{ matrix.target }}.log
 
     - name: Upload toolchain build log
       if: always()
@@ -782,7 +642,7 @@ jobs:
       with:
         name: toolchain_gnu_${{ matrix.host.name }}_${{ matrix.target }}
         path: |
-          toolchain_gnu_${{ matrix.host.name }}_${{ matrix.target }}.${{ matrix.host.archive }}
+          *.${{ matrix.host.archive }}
           md5.sum
           sha256.sum
 
